@@ -8,10 +8,19 @@ const IMAGE: &str = env!("SOL_OS_IMAGE");
 fn main() -> ExitCode {
     let mut headless = false;
     let mut print_image = false;
-    for argument in env::args().skip(1) {
+    let mut monitor = None;
+    let mut arguments = env::args().skip(1);
+    while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--headless" => headless = true,
             "--print-image" => print_image = true,
+            "--monitor" => match arguments.next() {
+                Some(path) => monitor = Some(PathBuf::from(path)),
+                None => {
+                    eprintln!("--monitor requires a UNIX socket path");
+                    return ExitCode::from(2);
+                }
+            },
             "--help" | "-h" => {
                 print_help();
                 return ExitCode::SUCCESS;
@@ -29,7 +38,7 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    match launch_qemu(headless) {
+    match launch_qemu(headless, monitor.as_deref()) {
         Ok(status) if status.success() => ExitCode::SUCCESS,
         Ok(status) => ExitCode::from(status.code().unwrap_or(1) as u8),
         Err(error) => {
@@ -40,10 +49,13 @@ fn main() -> ExitCode {
 }
 
 fn print_help() {
-    println!("Usage: cargo run -- [--headless] [--print-image]");
+    println!("Usage: cargo run -- [--headless] [--monitor PATH] [--print-image]");
 }
 
-fn launch_qemu(headless: bool) -> std::io::Result<std::process::ExitStatus> {
+fn launch_qemu(
+    headless: bool,
+    monitor: Option<&Path>,
+) -> std::io::Result<std::process::ExitStatus> {
     let code = firmware_path(
         "OVMF_CODE",
         &[
@@ -70,9 +82,11 @@ fn launch_qemu(headless: bool) -> std::io::Result<std::process::ExitStatus> {
     let mut qemu = Command::new(env::var_os("QEMU").unwrap_or_else(|| "qemu-system-x86_64".into()));
     qemu.args([
         "-machine",
-        "q35,accel=tcg",
+        "q35,accel=tcg,i8042=on,pic=on,pit=on",
         "-cpu",
         "max",
+        "-smp",
+        "1",
         "-m",
         "512M",
         "-drive",
@@ -96,11 +110,14 @@ fn launch_qemu(headless: bool) -> std::io::Result<std::process::ExitStatus> {
         "usb-storage,drive=boot,bus=xhci.0,bootindex=1",
         "-serial",
         "stdio",
-        "-monitor",
-        "none",
-        "-no-reboot",
-        "-no-shutdown",
     ]);
+    if let Some(monitor) = monitor {
+        let _ = fs::remove_file(monitor);
+        qemu.arg("-monitor")
+            .arg(format!("unix:{},server=on,wait=off", monitor.display()));
+    } else {
+        qemu.args(["-monitor", "none"]);
+    }
     if headless {
         qemu.args(["-display", "none"]);
     }

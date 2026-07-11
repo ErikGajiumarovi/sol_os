@@ -97,6 +97,19 @@ impl FramebufferWriter {
         }
     }
 
+    fn backspace(&mut self) {
+        let advance = get_raster_width(FONT_WEIGHT, FONT_HEIGHT) + LETTER_SPACING;
+        if self.column <= BORDER {
+            return;
+        }
+        self.column = self.column.saturating_sub(advance).max(BORDER);
+        for y in self.row..(self.row + FONT_HEIGHT.val()).min(self.info.height) {
+            for x in self.column..(self.column + advance).min(self.info.width) {
+                self.write_pixel(x, y, BACKGROUND);
+            }
+        }
+    }
+
     fn scroll(&mut self) {
         let pixel_rows = FONT_HEIGHT.val() + LINE_SPACING;
         let byte_rows = pixel_rows * self.info.stride * self.info.bytes_per_pixel;
@@ -138,6 +151,7 @@ impl Write for FramebufferWriter {
         for character in text.chars() {
             match character {
                 '\r' => self.column = BORDER,
+                '\u{8}' => self.backspace(),
                 '\t' => {
                     for _ in 0..4 {
                         self.write_character(' ');

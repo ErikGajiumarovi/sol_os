@@ -8,9 +8,25 @@ publish = false
 members = ["kernel"]
 resolver = "3"
 
+[features]
+fault-test-double = ["kernel/fault-test-double"]
+fault-test-gpf = ["kernel/fault-test-gpf"]
+fault-test-page = ["kernel/fault-test-page"]
+
 [build-dependencies]
-bootloader = { version = "=0.11.15", default-features = false, features = ["uefi"] }
-fatfs = { version = "0.3.6", default-features = false, features = ["alloc", "std"] }
+# This is a deliberately small, auditable fork of rust-osdev/bootloader 0.11.15.
+# It snapshots the `sol-data` GPT partition through UEFI Block I/O before
+# ExitBootServices, so the kernel filesystem originates from the boot USB's
+# real FAT32 partition instead of a build-time embedded RAM image.
+bootloader = { path = "vendor/bootloader", version = "=0.11.15", default-features = false, features = ["uefi"] }
+# The kernel deliberately implements the portable 8.3 subset of FAT32. Keep
+# the host-side image builder in the same mode: without `alloc`, `fatfs` emits
+# only short directory entries instead of optional VFAT long-name records.
+#
+# `bootloader` itself pulls fatfs 0.3.6 with `alloc`, so use a separately
+# resolved patch release here to prevent Cargo feature unification from
+# silently turning VFAT records back on for the data partition.
+fatfs_sfn = { package = "fatfs", version = "=0.3.5", default-features = false, features = ["std"] }
 fscommon = "0.1.1"
 gpt = "3.1.0"
 kernel = { path = "kernel", artifact = "bin", target = "x86_64-unknown-none" }
@@ -22,4 +38,3 @@ panic = "abort"
 codegen-units = 1
 lto = true
 panic = "abort"
-

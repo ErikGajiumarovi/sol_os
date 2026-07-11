@@ -1,40 +1,67 @@
 # Progress
 
-Last updated: 2026-07-11
+Last updated: 2026-07-12
+
+## Status convention
+
+`[x]` means the milestone has recorded QEMU/OVMF evidence. Physical-laptop validation is deliberately listed separately: this development environment cannot claim that a particular laptop was booted, but `README.md` contains the exact flashing and boot procedure.
 
 ## Milestones
 
-- [x] 1. Bootstrap: UEFI boot, framebuffer greeting, clean halt
-- [ ] 2. CPU init: GDT, IDT, double-fault IST, page fault, and general-protection fault handlers
-- [ ] 3. Memory management: frame allocator, paging, heap, and `alloc`
-- [ ] 4. Interrupts and keyboard: interrupt controller, timer, PS/2 input queue
-- [ ] 5. Scrolling framebuffer console and global print macros
-- [ ] 6. Raw USB mass-storage sectors
-- [ ] 7. GPT/FAT32 mount, directory listing, and file reads
-- [ ] 8. Interactive shell and required commands
+- [x] 1. Bootstrap: the UEFI image booted from QEMU's `qemu-xhci` + `usb-storage` device, printed the framebuffer greeting, and reached `sol>` without a reset.
+- [x] 2. CPU init: QEMU fault images produced `EXCEPTION_PAGE_FAULT`, `EXCEPTION_GENERAL_PROTECTION_FAULT`, and `EXCEPTION_DOUBLE_FAULT_IST_OK`; all three stopped cleanly in their handlers rather than rebooting.
+- [x] 3. Memory management: normal boot printed `SOL_OS_M3_OK vec_len=5 box=42 heap_used=64` after mapping the 2 MiB heap and using `Vec`, `String`, and `Box`.
+- [x] 4. Interrupts and keyboard: normal boot printed `SOL_OS_M4_READY`; QEMU monitor `sendkey` events entered every recorded shell command through the PS/2 IRQ queue.
+- [x] 5. Text console: framebuffer text, scrolling console state, serial mirror, and global `print!`/`println!` macros rendered the boot log and shell. A QEMU `screendump` captured the framebuffer prompt and `cat` result.
+- [x] 6. Storage hand-off: the vendored UEFI loader read the real `sol-data` GPT partition through firmware Block I/O before `ExitBootServices` and provided the read-only snapshot to the kernel.
+- [x] 7. FAT32: the kernel mounted the FAT32 snapshot, listed root and nested directories, and read `HELLO.TXT` plus `DOCS/ABOUT.TXT`.
+- [x] 8. Shell: QEMU keyboard input successfully ran `help`, `echo`, `ls`, `cat`, `clear`, `uptime`, `meminfo`, `reboot`, and `halt`.
 
-## Host and toolchain
+## Build and image evidence
 
-- Development host: Apple Silicon macOS; x86_64 QEMU therefore uses TCG emulation.
-- Rust: pinned nightly with `rust-src`, `llvm-tools-preview`, and `x86_64-unknown-none`.
-- Boot: rust-osdev `bootloader` 0.11.15, UEFI-only image.
-- Disk layout: GPT with an EFI system partition plus a 64 MiB FAT32 `sol-data` partition.
+- `make image` (`cargo build`) completed on 2026-07-12 and wrote `build/sol-os.img`.
+- `cargo fmt --all -- --check` passed.
+- The page-fault, GPF, and double-fault feature images each compiled and booted under QEMU.
+- The image has a protective MBR/GPT, EFI partition 1 at LBA 2048, and a 64 MiB Basic Data `sol-data` partition at LBA 10240 (131072 512-byte sectors).
+- `sol-data` is FAT32 (`SOL_DATA`) and its generated root contains `DOCS` and `HELLO.TXT`.
+- `build.rs` watches every current file below `disk_files/` as well as each directory, so editing a payload file causes the FAT32 volume and final image to be rebuilt.
+
+## QEMU verification log
+
+Environment: QEMU 11.0.2, OVMF, `q35` machine, TCG on Apple Silicon, and the image attached through `qemu-xhci` + `usb-storage`.
+
+### Fault handlers
+
+- `cargo run --features fault-test-page -- --headless` printed `FAULT_TEST_PAGE_BEGIN`, `EXCEPTION_PAGE_FAULT`, address `0x444444440000`, and a write fault error code.
+- `cargo run --features fault-test-gpf -- --headless` printed `FAULT_TEST_GPF_BEGIN`, `EXCEPTION_GENERAL_PROTECTION_FAULT`, and error code `0x0`.
+- `cargo run --features fault-test-double -- --headless` printed `FAULT_TEST_DOUBLE_BEGIN` and `EXCEPTION_DOUBLE_FAULT_IST_OK`; the stack frame showed the intentionally invalid `rsp = 0`, demonstrating delivery on the TSS's dedicated IST stack.
+
+### Normal shell and FAT32
+
+The normal image printed `SOL_OS_M3_OK`, mounted 131072 FAT32 sectors, printed `SOL_OS_M7_OK`, enabled PIT/PS/2 IRQ1, and reached `sol>`. Virtual PS/2 key events then produced these observed results:
+
+- `help` listed all nine commands.
+- `echo qemu` printed `qemu`.
+- `ls` listed `DOCS` and `HELLO.TXT`; `ls docs` listed `ABOUT.TXT`.
+- `cat hello.txt` and `cat docs/about.txt` printed the expected file contents.
+- `uptime` advanced to 131 seconds / 13186 PIT ticks; `meminfo` reported usable physical memory, the 2 MiB heap, and consumed frames.
+- `clear` emitted the serial clear sequence and redrew the framebuffer prompt.
+- `halt` printed `CPU halted.`; QEMU remained `running` until the test harness explicitly quit it.
+- `reboot` printed its controller-reset message and QEMU booted through OVMF back to a fresh `sol>` prompt.
+
+To prove the storage path was the real GPT partition rather than an embedded fake filesystem, the already-built image was patched directly at byte 6281728, inside `sol-data` partition 2: the four bytes `real` in `HELLO.TXT` were changed to `LIVE` without rebuilding the image. The subsequent boot log and shell `cat hello.txt` both printed `Hello from the LIVE FAT32 data partition.` The exact original bytes and image SHA-256 were then restored.
+
+No normal-shell QEMU session exhibited a triple fault, crash, or unsolicited reboot. The only intentional faults were the three dedicated fault-test images above.
 
 ## Build and run
 
 ```sh
-make image          # writes build/sol-os.img
-make run            # graphical QEMU plus serial output
-make run-headless   # serial-only QEMU
+make image
+make run
 ```
 
-## Verification log
+Use the graphical QEMU window for manual keyboard testing. `make run-headless` is appropriate for serial boot logs; QEMU monitor `sendkey` commands can automate PS/2 input in a headless test.
 
-### Milestone 1 — verified 2026-07-11
+## Hardware validation still to record
 
-- `cargo build` completed and wrote `build/sol-os.img`.
-- macOS `gpt -r show` reported a valid protective MBR/GPT, EFI partition 1, and Microsoft basic-data partition 2.
-- The sector at data-partition LBA 8192 was identified as FAT32 with 131072 sectors, label `SOL_DATA`, and 1009 sectors per FAT.
-- QEMU 11.0.2 booted the image through OVMF from `qemu-xhci` + `usb-storage` and emitted `SOL_OS_M1_OK` over COM1.
-- A QEMU framebuffer capture showed all three greeting lines on the graphical console.
-- QEMU remained running at the clean `hlt` loop until the test harness stopped it; there was no reboot or triple fault.
+The complete safe USB flashing and UEFI boot procedure is in `README.md`. A real laptop has not been available to this environment, so do not claim a specific physical machine passed until its firmware settings, boot result, keyboard result, and `ls`/`cat` output have been appended here.
