@@ -1,0 +1,15 @@
+[package]
+name = "kernel"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "kernel"
+path = "src/main.rs"
+
+[dependencies]
+bootloader_api = "=0.11.15"
+noto-sans-mono-bitmap = { version = "0.3.2", default-features = false, features = ["regular", "size_16", "unicode-basic-latin"] }
+spin = { version = "0.12.1", default-features = false, features = ["mutex", "spin_mutex"] }
+x86_64 = { version = "0.15.5", default-features = false, features = ["instructions"] }

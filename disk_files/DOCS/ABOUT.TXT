@@ -1,0 +1,2 @@
+Sol OS is a small x86_64 UEFI hobby operating system written in no_std Rust.
+

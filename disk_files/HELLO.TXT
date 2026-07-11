@@ -1,0 +1,3 @@
+Hello from the real FAT32 data partition.
+This file is part of the bootable USB image, not an in-memory fake filesystem.
+
