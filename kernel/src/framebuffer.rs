@@ -8,6 +8,7 @@ const FONT_HEIGHT: RasterHeight = RasterHeight::Size16;
 const LETTER_SPACING: usize = 1;
 const LINE_SPACING: usize = 2;
 const BORDER: usize = 8;
+const CURSOR_WIDTH: usize = 2;
 const FOREGROUND: [u8; 3] = [0xe6, 0xed, 0xf3];
 const BACKGROUND: [u8; 3] = [0x0a, 0x10, 0x20];
 
@@ -27,13 +28,21 @@ pub fn clear() {
 
 pub fn print(args: fmt::Arguments<'_>) {
     if let Some(writer) = WRITER.lock().as_mut() {
+        writer.hide_cursor();
         let _ = writer.write_fmt(args);
+    }
+}
+
+pub fn show_cursor() {
+    if let Some(writer) = WRITER.lock().as_mut() {
+        writer.show_cursor();
     }
 }
 
 pub fn panic_print(args: fmt::Arguments<'_>) {
     if let Some(mut guard) = WRITER.try_lock() {
         if let Some(writer) = guard.as_mut() {
+            writer.hide_cursor();
             let _ = writer.write_fmt(args);
         }
     }
@@ -44,6 +53,7 @@ struct FramebufferWriter {
     info: FrameBufferInfo,
     column: usize,
     row: usize,
+    cursor_visible: bool,
 }
 
 impl FramebufferWriter {
@@ -53,6 +63,7 @@ impl FramebufferWriter {
             info,
             column: BORDER,
             row: BORDER,
+            cursor_visible: false,
         }
     }
 
@@ -64,6 +75,7 @@ impl FramebufferWriter {
         }
         self.column = BORDER;
         self.row = BORDER;
+        self.cursor_visible = false;
     }
 
     fn write_character(&mut self, character: char) {
@@ -124,6 +136,30 @@ impl FramebufferWriter {
         self.row = self.row.saturating_sub(pixel_rows);
     }
 
+    fn show_cursor(&mut self) {
+        if !self.cursor_visible {
+            self.toggle_cursor();
+            self.cursor_visible = true;
+        }
+    }
+
+    fn hide_cursor(&mut self) {
+        if self.cursor_visible {
+            self.toggle_cursor();
+            self.cursor_visible = false;
+        }
+    }
+
+    fn toggle_cursor(&mut self) {
+        // XOR-style inversion makes the cursor reversible without storing the
+        // pixels underneath it. The shell redraws only one unwrapped input row.
+        for y in self.row..(self.row + FONT_HEIGHT.val()).min(self.info.height) {
+            for x in self.column..(self.column + CURSOR_WIDTH).min(self.info.width) {
+                self.invert_pixel(x, y);
+            }
+        }
+    }
+
     fn write_pixel(&mut self, x: usize, y: usize, rgb: [u8; 3]) {
         if x >= self.info.width || y >= self.info.height {
             return;
@@ -142,6 +178,16 @@ impl FramebufferWriter {
         self.buffer[offset..offset + count].copy_from_slice(&color[..count]);
         if self.info.bytes_per_pixel > 3 {
             self.buffer[offset + 3] = 0;
+        }
+    }
+
+    fn invert_pixel(&mut self, x: usize, y: usize) {
+        if x >= self.info.width || y >= self.info.height {
+            return;
+        }
+        let offset = (y * self.info.stride + x) * self.info.bytes_per_pixel;
+        for byte in &mut self.buffer[offset..offset + self.info.bytes_per_pixel.min(3)] {
+            *byte = !*byte;
         }
     }
 }

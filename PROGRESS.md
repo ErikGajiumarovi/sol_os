@@ -4,7 +4,7 @@ Last updated: 2026-07-12
 
 ## Status convention
 
-`[x]` means the milestone has recorded QEMU/OVMF evidence. Physical-laptop validation is deliberately listed separately: this development environment cannot claim that a particular laptop was booted, but `README.md` contains the exact flashing and boot procedure.
+`[x]` means the milestone has recorded QEMU/OVMF evidence. Physical-hardware validation is listed separately because the exact computer and firmware settings have not yet been recorded.
 
 ## Milestones
 
@@ -62,6 +62,6 @@ make run
 
 Use the graphical QEMU window for manual keyboard testing. `make run-headless` is appropriate for serial boot logs; QEMU monitor `sendkey` commands can automate PS/2 input in a headless test.
 
-## Hardware validation still to record
+## Physical-hardware validation
 
-The complete safe USB flashing and UEFI boot procedure is in `README.md`. A real laptop has not been available to this environment, so do not claim a specific physical machine passed until its firmware settings, boot result, keyboard result, and `ls`/`cat` output have been appended here.
+Manual validation reported a successful UEFI boot from the generated USB image, working keyboard input, and successful `ls`/`cat` use in the shell. The complete flashing procedure remains in `README.md`. Add the computer model, firmware settings, and observed command output here when available.

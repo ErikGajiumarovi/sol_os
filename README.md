@@ -57,11 +57,17 @@ clear
 halt
 ```
 
+The shell accepts ASCII input up to 80 bytes. Use Left/Right, Home/End,
+Backspace, and Delete to edit the current command. Up/Down browse the last 16
+non-empty commands; pressing Down after the newest entry restores the unfinished
+command that was present before history navigation. The graphical framebuffer
+shows the current input position with a solid cursor.
+
 Run `reboot` in a separate session because it resets the guest and starts a fresh boot. `make run-headless` is useful for boot/serial logging, but it has no interactive graphical keyboard; use the graphical run for manual input testing or QEMU's monitor `sendkey` commands for automation.
 
 ## Flashing a real USB drive
 
-**This destroys data on the selected drive.** The procedure is documented for the final hardware-validation step; no real-hardware boot has been claimed or recorded yet. Use a spare USB drive, identify it by model and capacity, and never substitute an internal system disk.
+**This destroys data on the selected drive.** Use a spare USB drive, identify it by model and capacity, and never substitute an internal system disk.
 
 1. Build the image with `make image` and close every QEMU instance using it.
 2. Write the complete image to the USB device, not to a partition.

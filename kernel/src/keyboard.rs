@@ -9,28 +9,43 @@ const PS2_DATA: u16 = 0x60;
 const PS2_STATUS_COMMAND: u16 = 0x64;
 const CONTROLLER_TIMEOUT: usize = 100_000;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyEvent {
+    Character(u8),
+    Backspace,
+    Tab,
+    Enter,
+    Left,
+    Right,
+    Up,
+    Down,
+    Home,
+    End,
+    Delete,
+}
+
 struct InputQueue {
-    bytes: UnsafeCell<[u8; INPUT_QUEUE_CAPACITY]>,
+    events: UnsafeCell<[KeyEvent; INPUT_QUEUE_CAPACITY]>,
     head: AtomicUsize,
     tail: AtomicUsize,
     dropped: AtomicUsize,
 }
 
 // The keyboard IRQ is the sole producer and the kernel main loop is the sole
-// consumer. Atomics publish each written byte before its head index advances.
+// consumer. Atomics publish each written event before its head index advances.
 unsafe impl Sync for InputQueue {}
 
 impl InputQueue {
     const fn new() -> Self {
         Self {
-            bytes: UnsafeCell::new([0; INPUT_QUEUE_CAPACITY]),
+            events: UnsafeCell::new([KeyEvent::Enter; INPUT_QUEUE_CAPACITY]),
             head: AtomicUsize::new(0),
             tail: AtomicUsize::new(0),
             dropped: AtomicUsize::new(0),
         }
     }
 
-    fn push(&self, byte: u8) {
+    fn push(&self, event: KeyEvent) {
         let head = self.head.load(Ordering::Relaxed);
         let next = (head + 1) % INPUT_QUEUE_CAPACITY;
         if next == self.tail.load(Ordering::Acquire) {
@@ -40,11 +55,11 @@ impl InputQueue {
 
         // SAFETY: IRQ1 is the only producer and owns the slot at `head` until
         // its Release store makes `next` visible to the main-loop consumer.
-        unsafe { (*self.bytes.get())[head] = byte };
+        unsafe { (*self.events.get())[head] = event };
         self.head.store(next, Ordering::Release);
     }
 
-    fn pop(&self) -> Option<u8> {
+    fn pop(&self) -> Option<KeyEvent> {
         let tail = self.tail.load(Ordering::Relaxed);
         if tail == self.head.load(Ordering::Acquire) {
             return None;
@@ -52,10 +67,10 @@ impl InputQueue {
 
         // SAFETY: seeing a different head after Acquire means the producer
         // completed the write to this slot before publishing it.
-        let byte = unsafe { (*self.bytes.get())[tail] };
+        let event = unsafe { (*self.events.get())[tail] };
         self.tail
             .store((tail + 1) % INPUT_QUEUE_CAPACITY, Ordering::Release);
-        Some(byte)
+        Some(event)
     }
 }
 
@@ -104,17 +119,20 @@ pub fn initialize_controller() -> bool {
     true
 }
 
-/// Consume a raw PS/2 set-1 scancode from IRQ1 and queue printable ASCII for
-/// the shell. This intentionally performs no allocation, locking, or rendering
-/// in interrupt context.
+/// Consume a raw PS/2 set-1 scancode from IRQ1 and queue input events for the
+/// shell. This intentionally performs no allocation, locking, or rendering in
+/// interrupt context.
 pub fn handle_scancode(scancode: u8) {
     if scancode == 0xe0 {
         EXTENDED_PREFIX.store(true, Ordering::Relaxed);
         return;
     }
     if EXTENDED_PREFIX.swap(false, Ordering::Relaxed) {
-        // Arrow/navigation keys can be added to the shell editor later; ignore
-        // their extended set-1 sequence without confusing the normal mapping.
+        if scancode & 0x80 == 0 {
+            if let Some(event) = extended_event_for_set_1(scancode) {
+                INPUT_QUEUE.push(event);
+            }
+        }
         return;
     }
 
@@ -136,14 +154,14 @@ pub fn handle_scancode(scancode: u8) {
     }
 
     let modifiers = MODIFIERS.load(Ordering::Relaxed);
-    if let Some(byte) =
+    if let Some(event) =
         ascii_for_set_1(scancode, modifiers & SHIFT != 0, modifiers & CAPS_LOCK != 0)
     {
-        INPUT_QUEUE.push(byte);
+        INPUT_QUEUE.push(event);
     }
 }
 
-pub fn next_char() -> Option<u8> {
+pub fn next_event() -> Option<KeyEvent> {
     INPUT_QUEUE.pop()
 }
 
@@ -151,7 +169,20 @@ pub fn dropped_chars() -> usize {
     INPUT_QUEUE.dropped.load(Ordering::Relaxed)
 }
 
-fn ascii_for_set_1(scancode: u8, shift: bool, caps_lock: bool) -> Option<u8> {
+fn extended_event_for_set_1(scancode: u8) -> Option<KeyEvent> {
+    match scancode {
+        0x47 => Some(KeyEvent::Home),
+        0x48 => Some(KeyEvent::Up),
+        0x4b => Some(KeyEvent::Left),
+        0x4d => Some(KeyEvent::Right),
+        0x4f => Some(KeyEvent::End),
+        0x50 => Some(KeyEvent::Down),
+        0x53 => Some(KeyEvent::Delete),
+        _ => None,
+    }
+}
+
+fn ascii_for_set_1(scancode: u8, shift: bool, caps_lock: bool) -> Option<KeyEvent> {
     let (plain, shifted) = match scancode {
         0x02 => (b'1', b'!'),
         0x03 => (b'2', b'@'),
@@ -165,11 +196,11 @@ fn ascii_for_set_1(scancode: u8, shift: bool, caps_lock: bool) -> Option<u8> {
         0x0b => (b'0', b')'),
         0x0c => (b'-', b'_'),
         0x0d => (b'=', b'+'),
-        0x0e => return Some(0x08),
-        0x0f => return Some(b'\t'),
+        0x0e => return Some(KeyEvent::Backspace),
+        0x0f => return Some(KeyEvent::Tab),
         0x1a => (b'[', b'{'),
         0x1b => (b']', b'}'),
-        0x1c => return Some(b'\n'),
+        0x1c => return Some(KeyEvent::Enter),
         0x27 => (b';', b':'),
         0x28 => (b'\'', b'\"'),
         0x29 => (b'`', b'~'),
@@ -177,13 +208,13 @@ fn ascii_for_set_1(scancode: u8, shift: bool, caps_lock: bool) -> Option<u8> {
         0x33 => (b',', b'<'),
         0x34 => (b'.', b'>'),
         0x35 => (b'/', b'?'),
-        0x39 => return Some(b' '),
+        0x39 => return Some(KeyEvent::Character(b' ')),
         code => return letter_for_set_1(code, shift ^ caps_lock),
     };
-    Some(if shift { shifted } else { plain })
+    Some(KeyEvent::Character(if shift { shifted } else { plain }))
 }
 
-fn letter_for_set_1(scancode: u8, uppercase: bool) -> Option<u8> {
+fn letter_for_set_1(scancode: u8, uppercase: bool) -> Option<KeyEvent> {
     let lowercase = match scancode {
         0x10 => b'q',
         0x11 => b'w',
@@ -213,11 +244,11 @@ fn letter_for_set_1(scancode: u8, uppercase: bool) -> Option<u8> {
         0x32 => b'm',
         _ => return None,
     };
-    Some(if uppercase {
+    Some(KeyEvent::Character(if uppercase {
         lowercase.to_ascii_uppercase()
     } else {
         lowercase
-    })
+    }))
 }
 
 unsafe fn read_status() -> u8 {
